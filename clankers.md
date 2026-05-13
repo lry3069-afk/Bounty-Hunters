@@ -10,9 +10,9 @@ Automated tracking of all Clankers PR contributors.
 | xlocalvn-svg | 26 | 2026-05-13 |
 | iice257 | 22 | 2026-05-13 |
 | darshan-Jahagirdar | 14 | 2026-05-13 |
+| callmekidz | 14 | 2026-05-13 |
 | suhail-ak-2 | 13 | 2026-05-13 |
 | MNgaminhhh | 13 | 2026-05-13 |
-| callmekidz | 13 | 2026-05-13 |
 | zeppnyc | 12 | 2026-05-13 |
 | Ahmadkhattak1 | 11 | 2026-05-13 |
 | albayrakburak55 | 9 | 2026-05-13 |
