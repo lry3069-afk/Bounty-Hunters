@@ -1,0 +1,5 @@
+{
+  "contributor": "AI Engineer",
+  "generation_context": "The monorepo uses Turbo for build orchestration but t3code/turbo.json does not define dependency graphs between packages, causing unnecessary rebuilds when only one package changes. Fix: Update t3code/turbo.json to define proper dependsOn relationships between build tasks. apps/web build should depend on packages/contracts and packages/client-runtime builds. apps/server build should depend on packages/contracts, packages/shared, packages/effect-acp, and packages/effect-codex-app-server. apps/desktop build should depend on apps/web and apps/server. Add cache output configuration for each package's build artifacts. Acceptance Criteria: Changing only packages/contracts triggers rebuild of dependent apps but not unrelated packages. Build cache works correctly with Turbo's hash-based caching. Full build order respects the dependency graph. No circular dependencies in the turbo pipeline. Existing build commands still work.",
+  "completed_at": "2026-05-25T03:45:00.000Z"
+}

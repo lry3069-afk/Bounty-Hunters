@@ -30,9 +30,26 @@
   ],
   "globalPassThroughEnv": ["PATHEXT"],
   "tasks": {
+    "//#web": {
+      "dependsOn": ["@t3tools/contracts#build", "@t3tools/client-runtime#build"],
+      "outputs": ["dist/**", ".next/**", "build/**"]
+    },
+    "//#server": {
+      "dependsOn": [
+        "@t3tools/contracts#build",
+        "@t3tools/shared#build",
+        "@t3tools/effect-acp#build",
+        "@t3tools/effect-codex-app-server#build"
+      ],
+      "outputs": ["dist/**"]
+    },
+    "//#desktop": {
+      "dependsOn": ["//#web", "//#server"],
+      "outputs": ["dist/**", "dist-electron/**"]
+    },
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", "dist-electron/**"]
+      "outputs": ["dist/**", "dist-electron/**", ".next/**", "build/**"]
     },
     "dev": {
       "dependsOn": ["@t3tools/contracts#build"],
