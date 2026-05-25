@@ -10,6 +10,8 @@ export const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 export const TAILSCALE_STATUS_TIMEOUT_MS = 1_500;
 export const TAILSCALE_SERVE_TIMEOUT_MS = 10_000;
 export const TAILSCALE_PROBE_TIMEOUT_MS = 2_500;
+export const TAILSCALE_DIAGNOSE_TIMEOUT_MS = 15_000;
+export const TAILSCALE_PING_TIMEOUT_MS = 5_000;
 
 export class TailscaleCommandError extends Data.TaggedError("TailscaleCommandError")<{
   readonly command: readonly string[];
@@ -26,22 +28,60 @@ export class TailscaleUnavailableError extends Data.TaggedError("TailscaleUnavai
   readonly reason: string;
 }> {}
 
+export class TailscalePeerNotFoundError extends Data.TaggedError("TailscalePeerNotFoundError")<{
+  readonly peer: string;
+}> {}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PeerDiagnostics Schema & Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const ConnectionType = Schema.Union(
+  Schema.Literal("direct"),
+  Schema.Literal("relayed"),
+  Schema.Literal("unknown"),
+);
+
+export type ConnectionType = Schema.Schema.Type<typeof ConnectionType>;
+
+export const PeerDiagnostics = Schema.Struct({
+  peer: Schema.String,
+  connectionType: ConnectionType,
+  latencyMs: Schema.Number,
+  relayServerName: Schema.OptionFromSelf(Schema.String),
+  relayServerRegion: Schema.OptionFromSelf(Schema.String),
+  directPeerIp: Schema.OptionFromSelf(Schema.String),
+  lastSeenTimestamp: Schema.OptionFromSelf(Schema.String),
+  isRunning: Schema.Boolean,
+});
+
+export type PeerDiagnostics = Schema.Schema.Type<typeof PeerDiagnostics>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JSON Parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
 const TailscaleStatusSelf = Schema.Struct({
   DNSName: Schema.optional(Schema.Unknown),
   TailscaleIPs: Schema.optional(Schema.Unknown),
+  Online: Schema.optional(Schema.Unknown),
+  LastSeen: Schema.optional(Schema.Unknown),
+});
+
+const TailscalePeer = Schema.Struct({
+  DNSName: Schema.optional(Schema.Unknown),
+  TailscaleIPs: Schema.optional(Schema.Unknown),
+  Online: Schema.optional(Schema.Unknown),
+  LastSeen: Schema.optional(Schema.Unknown),
+  Relay: Schema.optional(Schema.Unknown),
 });
 
 const TailscaleStatusJson = Schema.Struct({
   Self: Schema.optional(TailscaleStatusSelf),
+  Peer: Schema.optional(Schema.Record({ key: Schema.String, value: TailscalePeer })),
 });
 
-export type TailscaleStatusSelf = typeof TailscaleStatusSelf.Type;
-export type TailscaleStatusJson = typeof TailscaleStatusJson.Type;
-
-export interface TailscaleStatus {
-  readonly magicDnsName: string | null;
-  readonly tailnetIpv4Addresses: readonly string[];
-}
+export type TailscaleStatusJson = Schema.Schema.Type<typeof TailscaleStatusJson>;
 
 const collectStdout = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
   stream.pipe(
@@ -125,6 +165,15 @@ export const parseTailscaleStatus = (
     }),
   );
 
+export interface TailscaleStatus {
+  readonly magicDnsName: string | null;
+  readonly tailnetIpv4Addresses: readonly string[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tailscale Status (existing)
+// ─────────────────────────────────────────────────────────────────────────────
+
 export const readTailscaleStatus: Effect.Effect<
   TailscaleStatus,
   TailscaleCommandError | TailscaleStatusParseError,
@@ -185,6 +234,224 @@ export const readTailscaleStatus: Effect.Effect<
     }),
   ),
 );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ping parsing
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PingResult {
+  connectionType: "direct" | "relayed" | "unknown";
+  latencyMs: number;
+  relayServerName?: string;
+  relayServerRegion?: string;
+  directPeerIp?: string;
+}
+
+/**
+ * Parse a tailscale ping output line.
+ *
+ * Format examples:
+ *   100.64.1.1: connected to 100.64.1.1:       12.123ms
+ *   100.64.1.1: connected via relay tor-1:      45.678ms
+ *   100.64.1.1: no reply yet
+ */
+function parsePingLine(line: string): PingResult | null {
+  const directMatch = line.match(/(\d+\.\d+\.\d+\.\d+):\s*connected to (\d+\.\d+\.\d+\.\d+):\s*(\d+\.?\d*)ms/);
+  if (directMatch) {
+    return {
+      connectionType: "direct",
+      latencyMs: Number.parseFloat(directMatch[3]),
+      directPeerIp: directMatch[2],
+    };
+  }
+
+  const relayedMatch = line.match(/(\d+\.\d+\.\d+\.\d+):\s*connected via relay (\S+):\s*(\d+\.?\d*)ms/);
+  if (relayedMatch) {
+    const relayName = relayedMatch[2];
+    // e.g. "tor-1" or "del-fra-1" → extract region
+    const regionMatch = relayName.match(/^([a-z]{2,3})-([a-z]{2,})$/);
+    return {
+      connectionType: "relayed",
+      latencyMs: Number.parseFloat(relayedMatch[3]),
+      relayServerName: relayName,
+      relayServerRegion: regionMatch ? `${regionMatch[1]}-${regionMatch[2]}` : relayName,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Run tailscale ping for a peer and return parsed diagnostics.
+ */
+function runTailscalePing(
+  peer: string,
+  timeoutMs: number,
+): Effect.Effect<PingResult, TailscaleCommandError, ChildProcessSpawner.ChildProcessSpawner> {
+  return Effect.gen(function* () {
+    const args = ["ping", "--timeout=5s", peer];
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const child = yield* spawner
+      .spawn(
+        ChildProcess.make("tailscale", args, {
+          shell: process.platform === "win32",
+        }),
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          tailscaleCommandError(
+            args,
+            cause instanceof Error ? cause.message : "Failed to spawn tailscale ping.",
+            null,
+          ),
+        ),
+      );
+
+    const [stdout, stderr, exitCode] = yield* Effect.all(
+      [
+        collectStdout(child.stdout),
+        collectStderr(child.stderr),
+        child.exitCode.pipe(Effect.map(Number)),
+      ],
+      { concurrency: "unbounded" },
+    ).pipe(
+      Effect.mapError((cause) =>
+        tailscaleCommandError(
+          args,
+          cause instanceof Error ? cause.message : "Failed to run tailscale ping.",
+          null,
+        ),
+      ),
+    );
+
+    if (exitCode !== 0) {
+      return yield* tailscaleCommandError(args, `Tailscale ping exited with code ${exitCode}.`, exitCode, stderr);
+    }
+
+    // Parse ping output
+    const lines = stdout.split("\n").filter((l) => l.trim().length > 0);
+    for (const line of lines) {
+      const result = parsePingLine(line);
+      if (result !== null) {
+        return result;
+      }
+    }
+
+    // Fallback: try to find any latency in stderr
+    const latencyMatch = stderr.match(/(\d+\.?\d*)ms/) ?? stdout.match(/(\d+\.?\d*)ms/);
+    if (latencyMatch) {
+      return {
+        connectionType: "unknown",
+        latencyMs: Number.parseFloat(latencyMatch[1]),
+      };
+    }
+
+    return {
+      connectionType: "unknown",
+      latencyMs: -1,
+    };
+  }).pipe(
+    Effect.scoped,
+    Effect.timeoutOption(timeoutMs),
+    Effect.flatMap((result) =>
+      Option.match(result, {
+        onNone: () =>
+          Effect.fail(tailscaleCommandError(["ping", "--timeout=5s", peer], "Tailscale ping timed out.", null)),
+        onSome: Effect.succeed,
+      }),
+    ),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// diagnosePeer
+// ─────────────────────────────────────────────────────────────────────────────
+
+export { runTailscalePing as runTailscalePingForPeer };
+
+/**
+ * Diagnose a Tailscale peer: run `tailscale ping` and `tailscale status --json`
+ * to determine connection type, latency, relay info, and online status.
+ *
+ * @param peer - Peer hostname or IP (matches Peer[].DNSName or TailscaleIPs in status)
+ */
+export const diagnosePeer = (
+  peer: string,
+): Effect.Effect<
+  PeerDiagnostics,
+  | TailscaleCommandError
+  | TailscalePeerNotFoundError
+  | TailscaleStatusParseError,
+  ChildProcessSpawner.ChildProcessSpawner
+> =>
+  Effect.gen(function* () {
+    // Run ping (15s total budget)
+    const pingResult = yield* runTailscalePing(peer, TAILSCALE_PING_TIMEOUT_MS);
+
+    // Run status to get online/lastseen info
+    const statusJson = yield* readTailscaleStatus;
+
+    // Look up peer in full status JSON
+    const fullStatusParse = yield* decodeTailscaleStatusJson(
+      yield* Effect.tryPromise(() =>
+        // Re-read status as raw JSON for full peer map
+        import("child_process").then(({ execSync }) => {
+          const { execSync: exec } = require("child_process") as typeof import("child_process");
+          return exec("tailscale status --json", { encoding: "utf8", timeout: TAILSCALE_STATUS_TIMEOUT_MS }) as string;
+        })
+      ).pipe(Effect.flatMap((output) => Effect.succeed(output as string)))
+    ).pipe(Effect.mapError((cause) => new TailscaleStatusParseError({ cause })));
+
+    let isRunning = false;
+    let lastSeen: string | null = null;
+
+    const peers = fullStatusParse.Peer ?? {};
+    for (const [, peerInfo] of Object.entries(peers)) {
+      const dnsMatch = typeof peerInfo.DNSName === "string" && peerInfo.DNSName.startsWith(peer);
+      const ipMatch = Array.isArray(peerInfo.TailscaleIPs)
+        && peerInfo.TailscaleIPs.includes(peer);
+
+      if (dnsMatch || ipMatch) {
+        isRunning = peerInfo.Online === true;
+        if (typeof peerInfo.LastSeen === "string") {
+          lastSeen = peerInfo.LastSeen;
+        }
+        break;
+      }
+    }
+
+    return {
+      peer,
+      connectionType: pingResult.connectionType,
+      latencyMs: pingResult.latencyMs,
+      relayServerName: pingResult.relayServerName
+        ? Option.some(pingResult.relayServerName)
+        : Option.none(),
+      relayServerRegion: pingResult.relayServerRegion
+        ? Option.some(pingResult.relayServerRegion)
+        : Option.none(),
+      directPeerIp: pingResult.directPeerIp
+        ? Option.some(pingResult.directPeerIp)
+        : Option.none(),
+      lastSeenTimestamp: lastSeen ? Option.some(lastSeen) : Option.none(),
+      isRunning,
+    };
+  }).pipe(
+    Effect.timeoutOption(TAILSCALE_DIAGNOSE_TIMEOUT_MS),
+    Effect.flatMap((result) =>
+      Option.match(result, {
+        onNone: () =>
+          Effect.fail(
+            tailscaleCommandError(["status", "--json"], "Peer diagnostics timed out after 15s.", null),
+          ),
+        onSome: Effect.succeed,
+      }),
+    ),
+  );
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Serve (existing)
+// ─────────────────────────────────────────────────────────────────────────────
 
 export function buildTailscaleHttpsBaseUrl(input: {
   readonly magicDnsName: string;
