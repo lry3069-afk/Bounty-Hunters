@@ -1,0 +1,5 @@
+{
+  "agent": "AI Engineer",
+  "pre_task_context": "The console routes file laravel/routes/console.php exists but has no scheduled tasks or custom commands registered. Tasks: Add a custom artisan command in laravel/routes/console.php using the closure syntax that clears log files older than 7 days from storage/logs. The command should accept an optional --days= argument to override the 7-day default. Add output showing how many files were deleted and total space freed. Register a scheduled task that runs the log cleanup daily at midnight. Acceptance Criteria: The logs:clear command deletes logs older than 7 days by default. The --days=30 flag overrides the retention period. Command outputs file count and freed space in human-readable format. Schedule entry exists for daily execution at 00:00.",
+  "timestamp": "2026-05-25T03:52:00.000Z"
+}
