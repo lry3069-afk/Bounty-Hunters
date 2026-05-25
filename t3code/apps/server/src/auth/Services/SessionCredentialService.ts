@@ -81,6 +81,8 @@ export interface SessionCredentialServiceShape {
   readonly revokeAllExcept: (
     sessionId: AuthSessionId,
   ) => Effect.Effect<number, SessionCredentialError>;
+  /** Debounced last_active_at update — writes to DB at most once per 5 minutes. */
+  readonly markActive: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
   readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
   readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
 }

@@ -33,6 +33,7 @@ import {
 const SIGNING_SECRET_NAME = "server-signing-key";
 const DEFAULT_SESSION_TTL = Duration.days(30);
 const DEFAULT_WEBSOCKET_TOKEN_TTL = Duration.minutes(5);
+const LAST_ACTIVE_DEBOUNCE_MS = 5 * 60 * 1000; // 5 minutes
 
 const SessionClaims = Schema.Struct({
   v: Schema.Literal(1),
@@ -95,6 +96,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
   const authSessions = yield* AuthSessionRepository;
   const signingSecret = yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32);
   const connectedSessionsRef = yield* Ref.make(new Map<string, number>());
+  const lastActiveAtRef = yield* Ref.make(new Map<string, number>()); // sessionId → epoch ms
   const changesPubSub = yield* PubSub.unbounded<SessionCredentialChange>();
   const cookieName = resolveSessionCookieName({
     mode: serverConfig.mode,
@@ -171,6 +173,33 @@ export const makeSessionCredentialService = Effect.gen(function* () {
             sessionId,
             cause,
           }),
+        ),
+      ),
+    );
+
+  const markActive: SessionCredentialServiceShape["markActive"] = (sessionId) =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const lastActive = yield* Ref.get(lastActiveAtRef);
+      const lastUpdated = lastActive.get(sessionId) ?? 0;
+      if (now - lastUpdated < LAST_ACTIVE_DEBOUNCE_MS) {
+        return;
+      }
+      yield* Ref.update(lastActiveAtRef, (current) => {
+        const next = new Map(current);
+        next.set(sessionId, now);
+        return next;
+      });
+      yield* DateTime.now.pipe(
+        Effect.flatMap((lastActiveAt) =>
+          authSessions.setLastConnectedAt({ sessionId, lastConnectedAt }),
+        ),
+      );
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("Failed to update last_active_at.").pipe(
+          Effect.annotateLogs({ sessionId, cause }),
+        ),
         ),
       ),
     );
@@ -517,6 +546,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
     },
     revoke,
     revokeAllExcept,
+    markActive,
     markConnected,
     markDisconnected,
   } satisfies SessionCredentialServiceShape;

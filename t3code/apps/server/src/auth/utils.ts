@@ -98,6 +98,49 @@ function inferOs(userAgent: string | undefined): string | undefined {
   return undefined;
 }
 
+/**
+ * Parses a human-readable device/model name from a User-Agent string.
+ * Falls back to the OS name when no specific device model is detected.
+ */
+export function inferDeviceName(input: {
+  readonly userAgent: string | undefined;
+  readonly deviceType: AuthClientMetadataDeviceType;
+  readonly os: string | undefined;
+}): string | undefined {
+  const { userAgent, deviceType, os } = input;
+  if (!userAgent) {
+    return undefined;
+  }
+
+  const ua = userAgent;
+
+  // Mobile device models — checked first (more specific)
+  if (/iPhone(?:\sPro)?(?:\sMax)?/i.test(ua)) return "iPhone";
+  if (/iPad(?:\sPro)?(?:\sMini)?/i.test(ua)) return "iPad";
+  if (/iPod/i.test(ua)) return "iPod";
+
+  // Android device models — look for common brand patterns
+  const androidMatch = ua.match(/Android[^;]*(?:Samsung|Huawei|Xiaomi|OPPO|Vivo|OnePlus|Google|Pixel)[^;]*;\s*([^;]+)/i);
+  if (androidMatch) {
+    const model = androidMatch[1].replace(/[\/_]/g, " ").trim();
+    if (model.length > 0 && model.length < 60) return model;
+  }
+
+  // Desktop OS fallback
+  if (deviceType === "desktop" || deviceType === "unknown") {
+    if (os === "macOS") return "Mac";
+    if (os === "Windows") return "Windows PC";
+    if (os === "Linux") return "Linux";
+  }
+
+  // Generic device type
+  if (deviceType === "mobile") return "Mobile";
+  if (deviceType === "tablet") return "Tablet";
+  if (deviceType === "bot") return "Bot";
+
+  return undefined;
+}
+
 function readRemoteAddressFromSource(source: unknown): string | undefined {
   if (!source || typeof source !== "object") {
     return undefined;
@@ -119,13 +162,15 @@ export function deriveAuthClientMetadata(input: {
 }): AuthClientMetadata {
   const userAgent = normalizeNonEmptyString(input.request.headers["user-agent"]);
   const ipAddress = readRemoteAddressFromSource(input.request.source);
+  const deviceType = inferDeviceType(userAgent);
   const os = inferOs(userAgent);
   const browser = inferBrowser(userAgent);
+  const label = input.label ?? inferDeviceName({ userAgent, deviceType, os });
   return {
-    ...(input.label ? { label: input.label } : {}),
+    ...(label ? { label } : {}),
     ...(ipAddress ? { ipAddress } : {}),
     ...(userAgent ? { userAgent } : {}),
-    deviceType: inferDeviceType(userAgent),
+    deviceType,
     ...(os ? { os } : {}),
     ...(browser ? { browser } : {}),
   };

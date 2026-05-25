@@ -149,6 +149,34 @@ it.layer(NodeServices.layer)("SessionCredentialServiceLive", (it) => {
     }).pipe(Effect.provide(makeSessionCredentialLayer())),
   );
 
+  it.effect("markActive debounces last_active_at updates to once per 5 minutes", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionCredentialService;
+      const issued = yield* sessions.issue({
+        subject: "active-debounce-test",
+        method: "bearer-session-token",
+      });
+
+      // First call — should update lastConnectedAt
+      yield* sessions.markActive(issued.sessionId);
+      const afterFirst = yield* sessions.listActive();
+      const firstAt = afterFirst[0]?.lastConnectedAt;
+      expect(firstAt).not.toBeNull();
+
+      // Second call 1 minute later — should NOT update (debounced)
+      yield* TestClock.adjust(Duration.minutes(1));
+      yield* sessions.markActive(issued.sessionId);
+      const afterSecond = yield* sessions.listActive();
+      expect(afterSecond[0]?.lastConnectedAt?.toString()).toBe(firstAt?.toString());
+
+      // Third call after 5 more minutes — should update
+      yield* TestClock.adjust(Duration.minutes(5));
+      yield* sessions.markActive(issued.sessionId);
+      const afterThird = yield* sessions.listActive();
+      expect(afterThird[0]?.lastConnectedAt?.toString()).not.toBe(firstAt?.toString());
+    }).pipe(Effect.provide(Layer.merge(makeSessionCredentialLayer(), TestClock.layer()))),
+  );
+
   it.effect("persists lastConnectedAt on first connect and updates it after reconnect", () =>
     Effect.gen(function* () {
       const sessions = yield* SessionCredentialService;
