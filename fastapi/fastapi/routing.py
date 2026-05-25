@@ -1266,6 +1266,15 @@ class APIRouter(routing.Router):
                 """
             ),
         ] = Default(True),
+        middleware: Annotated[
+            Sequence[Callable[[ASGIApp], ASGIApp]] | None,
+            Doc(
+                """
+                A list of middleware to be applied to all *path operations*
+                in this router.
+                """
+            ),
+        ] = None,
     ) -> None:
         # Determine the lifespan context to use
         if lifespan is None:
@@ -1278,6 +1287,13 @@ class APIRouter(routing.Router):
         else:
             lifespan_context = lifespan
         self.lifespan_context = lifespan_context
+
+        self.middleware: list[
+            type[Callable[[ASGIApp], ASGIApp]]
+            | Callable[[], Callable[[ASGIApp], ASGIApp]]
+        ] = (
+            list(middleware) if middleware else []
+        )
 
         super().__init__(
             routes=routes,
@@ -1686,6 +1702,15 @@ class APIRouter(routing.Router):
                 """
             ),
         ] = Default(generate_unique_id),
+        middleware: Annotated[
+            Sequence[Callable[[ASGIApp], ASGIApp]] | None,
+            Doc(
+                """
+                A list of middleware to be applied to all *path operations*
+                in the included router.
+                """
+            ),
+        ] = None,
     ) -> None:
         """
         Include another `APIRouter` in the same current `APIRouter`.
@@ -1729,96 +1754,97 @@ class APIRouter(routing.Router):
                     )
         if responses is None:
             responses = {}
-        for route in router.routes:
-            if isinstance(route, APIRoute):
-                combined_responses = {**responses, **route.responses}
-                use_response_class = get_value_or_default(
-                    route.response_class,
-                    router.default_response_class,
-                    default_response_class,
-                    self.default_response_class,
-                )
-                current_tags = []
-                if tags:
-                    current_tags.extend(tags)
-                if route.tags:
-                    current_tags.extend(route.tags)
-                current_dependencies: list[params.Depends] = []
-                if dependencies:
-                    current_dependencies.extend(dependencies)
-                if route.dependencies:
-                    current_dependencies.extend(route.dependencies)
-                current_callbacks = []
-                if callbacks:
-                    current_callbacks.extend(callbacks)
-                if route.callbacks:
-                    current_callbacks.extend(route.callbacks)
-                current_generate_unique_id = get_value_or_default(
-                    route.generate_unique_id_function,
-                    router.generate_unique_id_function,
-                    generate_unique_id_function,
-                    self.generate_unique_id_function,
-                )
-                self.add_api_route(
-                    prefix + route.path,
-                    route.endpoint,
-                    response_model=route.response_model,
-                    status_code=route.status_code,
-                    tags=current_tags,
-                    dependencies=current_dependencies,
-                    summary=route.summary,
-                    description=route.description,
-                    response_description=route.response_description,
-                    responses=combined_responses,
-                    deprecated=route.deprecated or deprecated or self.deprecated,
-                    methods=route.methods,
-                    operation_id=route.operation_id,
-                    response_model_include=route.response_model_include,
-                    response_model_exclude=route.response_model_exclude,
-                    response_model_by_alias=route.response_model_by_alias,
-                    response_model_exclude_unset=route.response_model_exclude_unset,
-                    response_model_exclude_defaults=route.response_model_exclude_defaults,
-                    response_model_exclude_none=route.response_model_exclude_none,
-                    include_in_schema=route.include_in_schema
-                    and self.include_in_schema
-                    and include_in_schema,
-                    response_class=use_response_class,
-                    name=route.name,
-                    route_class_override=type(route),
-                    callbacks=current_callbacks,
-                    openapi_extra=route.openapi_extra,
-                    generate_unique_id_function=current_generate_unique_id,
-                    strict_content_type=get_value_or_default(
-                        route.strict_content_type,
-                        router.strict_content_type,
-                        self.strict_content_type,
-                    ),
-                )
-            elif isinstance(route, routing.Route):
-                methods = list(route.methods or [])
-                self.add_route(
-                    prefix + route.path,
-                    route.endpoint,
-                    methods=methods,
-                    include_in_schema=route.include_in_schema,
-                    name=route.name,
-                )
-            elif isinstance(route, APIWebSocketRoute):
-                current_dependencies = []
-                if dependencies:
-                    current_dependencies.extend(dependencies)
-                if route.dependencies:
-                    current_dependencies.extend(route.dependencies)
-                self.add_api_websocket_route(
-                    prefix + route.path,
-                    route.endpoint,
-                    dependencies=current_dependencies,
-                    name=route.name,
-                )
-            elif isinstance(route, routing.WebSocketRoute):
-                self.add_websocket_route(
-                    prefix + route.path, route.endpoint, name=route.name
-                )
+        if not (router.middleware or middleware):
+            for route in router.routes:
+                if isinstance(route, APIRoute):
+                    combined_responses = {**responses, **route.responses}
+                    use_response_class = get_value_or_default(
+                        route.response_class,
+                        router.default_response_class,
+                        default_response_class,
+                        self.default_response_class,
+                    )
+                    current_tags = []
+                    if tags:
+                        current_tags.extend(tags)
+                    if route.tags:
+                        current_tags.extend(route.tags)
+                    current_dependencies: list[params.Depends] = []
+                    if dependencies:
+                        current_dependencies.extend(dependencies)
+                    if route.dependencies:
+                        current_dependencies.extend(route.dependencies)
+                    current_callbacks = []
+                    if callbacks:
+                        current_callbacks.extend(callbacks)
+                    if route.callbacks:
+                        current_callbacks.extend(route.callbacks)
+                    current_generate_unique_id = get_value_or_default(
+                        route.generate_unique_id_function,
+                        router.generate_unique_id_function,
+                        generate_unique_id_function,
+                        self.generate_unique_id_function,
+                    )
+                    self.add_api_route(
+                        prefix + route.path,
+                        route.endpoint,
+                        response_model=route.response_model,
+                        status_code=route.status_code,
+                        tags=current_tags,
+                        dependencies=current_dependencies,
+                        summary=route.summary,
+                        description=route.description,
+                        response_description=route.response_description,
+                        responses=combined_responses,
+                        deprecated=route.deprecated or deprecated or self.deprecated,
+                        methods=route.methods,
+                        operation_id=route.operation_id,
+                        response_model_include=route.response_model_include,
+                        response_model_exclude=route.response_model_exclude,
+                        response_model_by_alias=route.response_model_by_alias,
+                        response_model_exclude_unset=route.response_model_exclude_unset,
+                        response_model_exclude_defaults=route.response_model_exclude_defaults,
+                        response_model_exclude_none=route.response_model_exclude_none,
+                        include_in_schema=route.include_in_schema
+                        and self.include_in_schema
+                        and include_in_schema,
+                        response_class=use_response_class,
+                        name=route.name,
+                        route_class_override=type(route),
+                        callbacks=current_callbacks,
+                        openapi_extra=route.openapi_extra,
+                        generate_unique_id_function=current_generate_unique_id,
+                        strict_content_type=get_value_or_default(
+                            route.strict_content_type,
+                            router.strict_content_type,
+                            self.strict_content_type,
+                        ),
+                    )
+                elif isinstance(route, routing.Route):
+                    methods = list(route.methods or [])
+                    self.add_route(
+                        prefix + route.path,
+                        route.endpoint,
+                        methods=methods,
+                        include_in_schema=route.include_in_schema,
+                        name=route.name,
+                    )
+                elif isinstance(route, APIWebSocketRoute):
+                    current_dependencies = []
+                    if dependencies:
+                        current_dependencies.extend(dependencies)
+                    if route.dependencies:
+                        current_dependencies.extend(route.dependencies)
+                    self.add_api_websocket_route(
+                        prefix + route.path,
+                        route.endpoint,
+                        dependencies=current_dependencies,
+                        name=route.name,
+                    )
+                elif isinstance(route, routing.WebSocketRoute):
+                    self.add_websocket_route(
+                        prefix + route.path, route.endpoint, name=route.name
+                    )
         for handler in router.on_startup:
             self.add_event_handler("startup", handler)
         for handler in router.on_shutdown:
@@ -1827,6 +1853,52 @@ class APIRouter(routing.Router):
             self.lifespan_context,
             router.lifespan_context,
         )
+
+        # Apply child router middleware via Mount to scope middleware to child routes
+        if router.middleware or middleware:
+            wrapped_app: ASGIApp = router.app
+            for mw_cls in router.middleware or []:
+                wrapped_app = mw_cls(app=wrapped_app)
+            for mw_cls in middleware or []:
+                wrapped_app = mw_cls(app=wrapped_app)
+            self.mount(
+                prefix or "/",
+                app=wrapped_app,
+                name=router.prefix or None,
+            )
+
+    def add_middleware(
+        self,
+        middleware_class: Annotated[
+            type[Callable[[ASGIApp], ASGIApp]],
+            Doc(
+                """
+                A middleware class that follows the ASGI middleware pattern.
+                It should be a callable that takes an ASGI app and returns an
+                ASGI app that wraps it.
+                """
+            ),
+        ],
+        **middleware_kwargs: Annotated[
+            Any,
+            Doc(
+                """
+                Any additional keyword arguments to pass to the middleware class
+                constructor.
+                """
+            ),
+        ],
+    ) -> None:
+        """
+        Add a middleware to the router.
+
+        The middleware will only apply to routes registered on this router.
+        Routes on other routers or the main app are not affected.
+        """
+        mw_instance = middleware_class(app=self.app, **middleware_kwargs)
+        self.middleware.append(mw_instance)
+        if self.routes:
+            self.app = mw_instance
 
     def get(
         self,

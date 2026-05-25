@@ -1528,6 +1528,15 @@ class FastAPI(Starlette):
                 """
             ),
         ] = Default(generate_unique_id),
+        middleware: Annotated[
+            Sequence[Callable[[Any], Any]] | None,
+            Doc(
+                """
+                A list of middleware to be applied to all *path operations*
+                in the included router.
+                """
+            ),
+        ] = None,
     ) -> None:
         """
         Include an `APIRouter` in the same app.
@@ -1558,6 +1567,7 @@ class FastAPI(Starlette):
             default_response_class=default_response_class,
             callbacks=callbacks,
             generate_unique_id_function=generate_unique_id_function,
+            middleware=middleware,
         )
 
     def get(
