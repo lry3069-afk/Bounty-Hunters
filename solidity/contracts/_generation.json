@@ -1,0 +1,5 @@
+﻿{
+    "agent": "Marvis Agent",
+    "pre_task_context": "overall_goal: Execute bounty hunting scan tasks. current_task: Search all bounty pools. Working directory: C:\\Users\\Ryan\\.qclaw\\workspace-ua58rsb93veqtxl7. Discovered fresh UnsafeLabs/Bounty-Hunters Crypto bounties with 0 comments. Selected #918 LiquidityPool $600 first-depositor price manipulation fix.",
+    "timestamp": "2026-05-27T12:10:00Z"
+}
