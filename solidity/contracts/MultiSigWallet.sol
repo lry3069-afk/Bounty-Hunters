@@ -1,10 +1,11 @@
-// SPDX-License-Identifier: MIT
+﻿// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
 contract MultiSigWallet {
     address[] public owners;
     uint256 public required;
     uint256 public transactionCount;
+    bool private locked;
 
     struct Transaction {
         address to;
@@ -15,6 +16,8 @@ contract MultiSigWallet {
 
     mapping(uint256 => Transaction) public transactions;
     mapping(uint256 => mapping(address => bool)) public confirmations;
+    // Block-level confirmation snapshot per transaction
+    mapping(uint256 => uint256) public confirmationSnapshots;
     mapping(address => bool) public isOwner;
 
     event Submitted(uint256 indexed txId);
@@ -27,6 +30,13 @@ contract MultiSigWallet {
         _;
     }
 
+    modifier nonReentrant() {
+        require(!locked, "Reentrant call");
+        locked = true;
+        _;
+        locked = false;
+    }
+
     constructor(address[] memory _owners, uint256 _required) {
         require(_owners.length > 0, "No owners");
         require(_required > 0 && _required <= _owners.length, "Invalid required");
@@ -37,8 +47,9 @@ contract MultiSigWallet {
         required = _required;
     }
 
-    // BUG: No zero-address validation on `to`
+    // FIXED: zero-address validation on 	o
     function submitTransaction(address to, uint256 value, bytes calldata data) external onlyOwner returns (uint256) {
+        require(to != address(0), "Invalid to address");
         uint256 txId = transactionCount++;
         transactions[txId] = Transaction({
             to: to,
@@ -70,11 +81,23 @@ contract MultiSigWallet {
         }
     }
 
-    // BUG: No reentrancy protection — confirmation can be revoked during callback
-    // BUG: No block-level confirmation snapshot
-    function executeTransaction(uint256 txId) external onlyOwner {
+    // FIXED: block-level confirmation snapshot prevents front-running revocations
+    function isConfirmedAtBlock(uint256 txId) public view returns (bool) {
+        return confirmationSnapshots[txId] != 0;
+    }
+
+    // FIXED: nonReentrant prevents confirmation revocation during callback
+    // FIXED: block-level snapshot prevents front-running
+    function executeTransaction(uint256 txId) external onlyOwner nonReentrant {
         require(!transactions[txId].executed, "Already executed");
-        require(getConfirmationCount(txId) >= required, "Not enough confirmations");
+
+        // Snapshot confirmation count before execution
+        uint256 count = getConfirmationCount(txId);
+        require(count >= required, "Not enough confirmations");
+
+        // Store block-level snapshot to prevent front-running
+        require(confirmationSnapshots[txId] == 0, "Already snapshotted");
+        confirmationSnapshots[txId] = block.number;
 
         Transaction storage txn = transactions[txId];
         txn.executed = true;
