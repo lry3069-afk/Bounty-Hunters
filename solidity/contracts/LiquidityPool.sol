@@ -29,7 +29,7 @@ contract LiquidityPool is ERC20 {
         if (totalSupply() == 0) {
             // BUG: No minimum liquidity lock to address(0)
             lpTokens = sqrt(amountA * amountB) - MINIMUM_LIQUIDITY;
-        _mint(address(0), MINIMUM_LIQUIDITY); // LOCK MINIMUM_LIQUIDITY to address(0)
+            _mint(address(0), MINIMUM_LIQUIDITY); // LOCK MINIMUM_LIQUIDITY to address(0)
         } else {
             uint256 lpFromA = amountA * totalSupply() / reserveA;
             uint256 lpFromB = amountB * totalSupply() / reserveB;
